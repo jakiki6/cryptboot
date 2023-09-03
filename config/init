@@ -1,0 +1,89 @@
+#!/bin/sh
+
+export PATH=/bin:/sbin
+
+mkdir /proc
+mkdir /sys
+mkdir /tmp
+mkdir /run
+mkdir /mnt
+
+mount -t devtmpfs none /dev
+mount -t proc none /proc
+mount -t sysfs none /sys
+
+info() {
+    echo -e "\x1b[32m[*] $@\x1b[0m"
+}
+
+success() {
+    echo -e "\x1b[92m[*] $@\x1b[0m"
+}
+
+warn() {
+    echo -e "\x1b[93m[!] $@\x1b[0m"
+}
+
+error() {
+    echo -e "\x1b[91m[!!!] $@ [!!!]\x1b[0m"
+    exec bash -i
+}
+
+echo 1 > /proc/sys/kernel/printk
+clear
+
+for mod in $(find /lib | grep .ko); do
+    info "Inserting module $mod"
+    modprobe $(echo $mod | rev | cut -d'/' -f1 | rev | cut -d'.' -f1)
+done
+
+for dev in $(lsblk -i --output NAME | grep -v - | grep -v NAME); do
+    export dev=/dev/$dev
+
+    info "Checking $dev"
+
+    head -c 64 $dev > header.bin 2> /dev/null || touch header.bin
+
+    cmp --silent header.bin magic.bin
+    if [ "$?" == "0" ]; then
+        success "Found valid device"
+
+        dd if=$dev of=disk_key bs=1 skip=64 count=64 status=none
+        dd if=$dev bs=1 skip=128 count=384 status=none | head -n 1 > hostname
+
+        info "Setting up networking"
+	ifconfig lo 127.0.0.1
+	route add -net 127.0.0.0 netmask 255.0.0.0 lo
+	mkdir /var
+	mkdir /var/db
+	mkdir /var/run
+	mkdir /etc
+	touch /etc/resolv.conf
+	dhcpcd --waitip 2> /dhcpcd.log || error "Couldn't connect to network"
+
+        route > /dev/null
+
+        info "Fetching key part over tor"
+	curl $(cat hostname) > tor_key || error "Couldn't connect to tor"
+
+	echo -ne $(cat disk_key tor_key | sha512sum | cut -d" " -f1 | sed -e "s/../\\\\x&/g") > key
+
+        info "Mounting root"
+        cryptsetup --cipher=aes-xts-plain64 --offset=512 --key-file=key --key-size=512 open --type plain $dev root || error "Key derivation failed"
+
+        mkdir /newroot
+        mount /dev/mapper/root /newroot || error "Couldn't mount root filesystem"
+
+	info "Stopping dhcpcd"
+	dhcpcd --release
+
+	shred key
+	rm key
+
+        success "Switching root and executing new init"
+	clear
+        exec switch_root /newroot /sbin/init
+    fi
+done
+
+error "Couldn't find a bootable device"

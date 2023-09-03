@@ -1,0 +1,5 @@
+build/*
+bzImage
+*.img
+*.xz
+tor_key
