@@ -42,46 +42,46 @@ for dev in $(lsblk -i --output NAME | grep -v - | grep -v NAME); do
 
     info "Checking $dev"
 
-    head -c 64 $dev > header.bin 2> /dev/null || touch header.bin
+    head -c 64 ${dev}1 > header.bin 2> /dev/null || touch header.bin
 
     cmp --silent header.bin magic.bin
     if [ "$?" == "0" ]; then
         success "Found valid device"
 
-        dd if=$dev of=disk_key bs=1 skip=64 count=64 status=none
-        dd if=$dev bs=1 skip=128 count=384 status=none | head -n 1 > hostname
+        dd if=${dev}1 of=disk_key bs=1 skip=64 count=64 status=none
+        dd if=${dev}1 bs=1 skip=128 count=384 status=none | head -n 1 > hostname
 
         info "Setting up networking"
-	ifconfig lo 127.0.0.1
-	route add -net 127.0.0.0 netmask 255.0.0.0 lo
-	mkdir /var
-	mkdir /var/db
-	mkdir /var/run
-	mkdir /etc
-	touch /etc/resolv.conf
-	dhcpcd --waitip 2> /dhcpcd.log || error "Couldn't connect to network"
+    	ifconfig lo 127.0.0.1
+    	route add -net 127.0.0.0 netmask 255.0.0.0 lo
+	    mkdir /var
+    	mkdir /var/db
+	    mkdir /var/run
+    	mkdir /etc
+	    touch /etc/resolv.conf
+    	dhcpcd --waitip 2> /dhcpcd.log || error "Couldn't connect to network"
 
         route > /dev/null
 
         info "Fetching key part over tor"
-	curl $(cat hostname) > tor_key || error "Couldn't connect to tor"
+        curl $(cat hostname) > tor_key || error "Couldn't connect to tor"
 
-	echo -ne $(cat disk_key tor_key | sha512sum | cut -d" " -f1 | sed -e "s/../\\\\x&/g") > key
+    	cat disk_key tor_key > key
 
         info "Mounting root"
-        cryptsetup --cipher=aes-xts-plain64 --offset=512 --key-file=key --key-size=512 open --type plain $dev root || error "Key derivation failed"
+        cryptsetup --key-file=key luksOpen ${dev}2 root || error "Key derivation failed"
 
         mkdir /newroot
         mount /dev/mapper/root /newroot || error "Couldn't mount root filesystem"
 
-	info "Stopping dhcpcd"
-	dhcpcd --release
+    	info "Stopping dhcpcd"
+	    dhcpcd --release
 
-	shred key
-	rm key
+    	shred key
+	    rm key
 
         success "Switching root and executing new init"
-	clear
+	    clear
         exec switch_root /newroot /sbin/init
     fi
 done
